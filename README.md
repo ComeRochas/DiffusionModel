@@ -91,8 +91,7 @@ Options:
 This will generate:
 1. **Unconditional samples**: Random digit generation without guidance
 2. **Guided samples**: Digits conditioned on a specific class
-3. **Counterfactual pairs**: Side-by-side comparison showing "What if we changed the class?"
-4. **All digits**: Side-by-side comparison of denoising the same samples, but conditioned on the classes
+3. **All digits conditioning**: Side-by-side comparison of denoising the same samples 10 times, by conditioned on the digit classes
 
 ## How It Works
 
