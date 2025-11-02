@@ -75,9 +75,8 @@ Generate counterfactual samples using the trained models:
 python sample_counterfactuals.py \
     --diffusion-checkpoint checkpoints/diffusion_final.pt \
     --classifier-checkpoint checkpoints/classifier.pt \
-    --guidance-scale 5.0 \
-    --source-class 3 \
-    --target-class 8
+    --guidance-scale 3.0 \
+    --source-class 8 
 ```
 
 Options:

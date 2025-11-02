@@ -39,7 +39,7 @@ def train_diffusion_model(
     
     # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
-    os.makedirs('results', exist_ok=True)
+    os.makedirs('training_results', exist_ok=True)
     
     # Setup data
     transform = transforms.Compose([
@@ -124,10 +124,10 @@ def train_diffusion_model(
                     ax.imshow(samples[i, 0], cmap='gray')
                     ax.axis('off')
                 plt.tight_layout()
-                plt.savefig(f'results/samples_epoch_{epoch+1}.png')
+                plt.savefig(f'training_results/samples_epoch_{epoch+1}.png')
                 plt.close()
-                print(f"Saved samples: results/samples_epoch_{epoch+1}.png")
-    
+                print(f"Saved samples: training_results/samples_epoch_{epoch+1}.png")
+
     # Final save
     final_path = os.path.join(checkpoint_dir, 'diffusion_final.pt')
     torch.save({

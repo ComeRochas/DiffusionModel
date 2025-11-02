@@ -65,11 +65,12 @@ def sample_unconditional(model, diffusion, n_samples=16, device='cuda'):
     # Scale to [0, 1]
     samples = (samples + 1) / 2
     samples = torch.clamp(samples, 0, 1)
-    
-    return samples
+    # If gradients were enabled during generation, detach before returning so callers
+    # can convert to numpy without needing to call detach themselves.
+    return samples.detach()
 
 
-def sample_guided(model, classifier, diffusion, target_class, guidance_scale=5.0, 
+def sample_guided(model, classifier, diffusion, target_class, guidance_scales=5.0, 
                   n_samples=16, device='cuda'):
     """
     Generate class-conditional samples with classifier guidance.
@@ -79,28 +80,42 @@ def sample_guided(model, classifier, diffusion, target_class, guidance_scale=5.0
         classifier: Classifier for guidance
         diffusion: DiffusionProcess instance
         target_class: Target class to generate (0-9 for MNIST)
-        guidance_scale: Strength of classifier guidance
-        n_samples: Number of samples to generate
+        guidance_scales: Either a single guidance scale (float) or a list/tuple of
+            guidance scales. If a list is provided, the function will generate
+            `n_samples` images for each guidance scale and return a list of
+            result tensors (one per guidance scale). If a single float is
+            provided, a single tensor is returned (backwards compatible).
+        n_samples: Number of samples to generate per guidance scale
         device: Device to generate on
         
     Returns:
-        Generated samples
+        If `guidance_scales` is a scalar: a tensor of shape (n_samples, 1, 28, 28).
+        If `guidance_scales` is a list: a list of tensors, each of shape
+        (n_samples, 1, 28, 28), corresponding to each guidance scale.
     """
-    print(f"Generating guided samples for class {target_class} with guidance scale {guidance_scale}...")
-    with torch.no_grad():
-        samples = diffusion.p_sample_loop(
-            model,
-            shape=(n_samples, 1, 28, 28),
-            classifier=classifier,
-            guidance_scale=guidance_scale,
-            target_class=target_class
-        )
-    
-    # Scale to [0, 1]
-    samples = (samples + 1) / 2
-    samples = torch.clamp(samples, 0, 1)
-    
-    return samples
+    single_input = not isinstance(guidance_scales, (list, tuple))
+    scales = [guidance_scales] if single_input else list(guidance_scales)
+
+    results = []
+    for gs in scales:
+        print(f"Generating guided samples for class {target_class} with guidance scale {gs}...")
+        # Only enable gradients when guidance is requested; keep no_grad for unconditional speed
+        with torch.set_grad_enabled(gs > 0 and classifier is not None):
+            samples = diffusion.p_sample_loop(
+                model,
+                shape=(n_samples, 1, 28, 28),
+                classifier=classifier,
+                guidance_scale=gs,
+                target_class=target_class
+            )
+
+        # Scale to [0, 1]
+        samples = (samples + 1) / 2
+        samples = torch.clamp(samples, 0, 1).detach()
+        results.append(samples)
+
+    # Backwards compatible: return a single tensor when the user provided a scalar
+    return results[0] if single_input else results
 
 
 def generate_counterfactual_comparison(model, classifier, diffusion, 
@@ -125,14 +140,21 @@ def generate_counterfactual_comparison(model, classifier, diffusion,
     """
     print(f"Generating counterfactual pairs: {source_class} -> {target_class}")
     
-    with torch.no_grad():
+    # Enable gradients only if guidance is used so classifier gradients can propagate to x_t
+    with torch.set_grad_enabled(guidance_scale > 0 and classifier is not None):
+        
+        x_init = torch.randn((n_pairs, 1, 28, 28), device=device)
+    
+        x_t_source = x_init.clone()
+        x_t_target = x_init.clone()
         # Generate samples conditioned on source class
         source_samples = diffusion.p_sample_loop(
             model,
             shape=(n_pairs, 1, 28, 28),
             classifier=classifier,
             guidance_scale=guidance_scale,
-            target_class=source_class
+            target_class=source_class,
+            x_start=x_t_source
         )
         
         # Generate samples conditioned on target class (counterfactual)
@@ -141,7 +163,8 @@ def generate_counterfactual_comparison(model, classifier, diffusion,
             shape=(n_pairs, 1, 28, 28),
             classifier=classifier,
             guidance_scale=guidance_scale,
-            target_class=target_class
+            target_class=target_class,
+            x_start=x_t_target
         )
     
     # Scale to [0, 1]
@@ -149,8 +172,9 @@ def generate_counterfactual_comparison(model, classifier, diffusion,
     target_samples = (target_samples + 1) / 2
     source_samples = torch.clamp(source_samples, 0, 1)
     target_samples = torch.clamp(target_samples, 0, 1)
-    
-    return source_samples, target_samples
+
+    # Detach in case gradients were enabled earlier during guided sampling
+    return source_samples.detach(), target_samples.detach()
 
 
 def visualize_samples(samples, title, save_path, nrows=4, ncols=4):
@@ -164,7 +188,9 @@ def visualize_samples(samples, title, save_path, nrows=4, ncols=4):
         nrows: Number of rows in grid
         ncols: Number of columns in grid
     """
-    samples = samples.cpu().numpy()
+    # Ensure we operate on a detached CPU numpy array (works whether or not
+    # the tensor currently requires grad).
+    samples = samples.detach().cpu().numpy()
     
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols*2, nrows*2))
     axes = axes.flatten()
@@ -195,8 +221,10 @@ def visualize_counterfactual_pairs(source_samples, target_samples,
         target_class: Target class label
         save_path: Path to save figure
     """
-    source_samples = source_samples.cpu().numpy()
-    target_samples = target_samples.cpu().numpy()
+    # Operate on detached CPU numpy arrays to avoid numpy() on tensors that
+    # require gradients.
+    source_samples = source_samples.detach().cpu().numpy()
+    target_samples = target_samples.detach().cpu().numpy()
     
     n_pairs = len(source_samples)
     fig, axes = plt.subplots(n_pairs, 2, figsize=(4, n_pairs*2))
@@ -275,18 +303,45 @@ def main():
     
     # 2. Generate guided samples for a specific class
     print("\n=== Guided Generation ===")
+    guidance_scales = [0.5, 2.0, 5.0, 10.0]
     guided_samples = sample_guided(
         model, classifier, diffusion,
         target_class=args.source_class,
-        guidance_scale=args.guidance_scale,
-        n_samples=args.n_samples,
+        guidance_scales=guidance_scales,
+        n_samples=4,
         device=args.device
     )
-    visualize_samples(
-        guided_samples,
-        f'Guided Samples (Class {args.source_class}, Scale {args.guidance_scale})',
-        os.path.join(args.output_dir, 'sample_guided.png')
-    )
+
+    # guided_samples is a list (one tensor per guidance scale). Create a figure
+    # with one row per scale and n_samples columns to compare effects of guidance.
+    n_rows = len(guided_samples)
+    n_cols = guided_samples[0].shape[0]
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 1.2, n_rows * 1.2))
+
+    # Normalize axes shape for consistent indexing
+    axes = np.atleast_2d(axes)
+
+    for i, samples in enumerate(guided_samples):
+        samples_np = samples.detach().cpu().numpy()
+        for j in range(n_cols):
+            ax = axes[i, j]
+            ax.imshow(samples_np[j, 0], cmap='gray', vmin=0, vmax=1)
+            ax.axis('off')
+
+        # Place the guidance scale text to the left of the row using figure coordinates
+        pos = axes[i, 0].get_position()  # BBox in figure coordinates
+        fig.text(pos.x0 - 0.15, pos.y0 + pos.height / 2,
+                 f'{guidance_scales[i]}', fontsize=10,
+                 ha='right', va='center')
+
+    plt.suptitle(f'Guided Samples (Class {args.source_class}) with different Guidance Scales', fontsize=14)
+    plt.tight_layout()
+    out_path = os.path.join(args.output_dir, 'sample_guided.png')
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {out_path}")
+    plt.close()
+    
     
     # 3. Generate counterfactual pairs
     print("\n=== Counterfactual Generation ===")
@@ -303,24 +358,38 @@ def main():
         args.source_class, args.target_class,
         os.path.join(args.output_dir, 'counterfactual_example.png')
     )
-    
+
+
     # 4. Generate samples for all digits
     print("\n=== Generating All Digits ===")
     all_digit_samples = []
-    for digit in range(10):
-        samples = sample_guided(
-            model, classifier, diffusion,
-            target_class=digit,
-            guidance_scale=args.guidance_scale,
-            n_samples=10,
-            device=args.device
-        )
-        all_digit_samples.append(samples)
-    
+
+    # Pre-generate 10 random initial images. Each digit will use the same set of 10 inputs, producing 10 outputs per digit (100 total).
+    x_inits = torch.randn((10, 1, 28, 28), device=args.device)
+    n_per_digit = x_inits.shape[0]
+    # If guidance is required we need gradients enabled during the p_sample_loop
+    with torch.set_grad_enabled(args.guidance_scale > 0 and classifier is not None):
+        for digit in range(10):
+            # Use the same 10 inputs for every digit
+            samples = diffusion.p_sample_loop(
+                model,
+                shape=(n_per_digit, 1, 28, 28),
+                classifier=classifier,
+                guidance_scale=args.guidance_scale,
+                target_class=digit,
+                x_start=x_inits
+            )
+
+            # Scale and clamp, then detach to avoid requiring grad downstream
+            samples = (samples + 1) / 2
+            samples = torch.clamp(samples, 0, 1).detach()
+            all_digit_samples.append(samples)
+
     all_digit_samples = torch.cat(all_digit_samples, dim=0)
     
     # Visualize all digits in a 10x10 grid
-    samples_np = all_digit_samples.cpu().numpy()
+    # Detach before converting to numpy in case tensors require gradients
+    samples_np = all_digit_samples.detach().cpu().numpy()
     fig, axes = plt.subplots(10, 10, figsize=(12, 12))
     
     for i in range(10):

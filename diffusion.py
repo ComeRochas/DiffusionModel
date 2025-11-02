@@ -140,7 +140,7 @@ class DiffusionProcess:
             
         return x_prev
     
-    def p_sample_loop(self, model, shape, classifier=None, guidance_scale=0.0, target_class=None):
+    def p_sample_loop(self, model, shape, classifier=None, guidance_scale=0.0, target_class=None, x_start=None):
         """
         Complete reverse diffusion loop to generate samples from noise.
         
@@ -157,7 +157,7 @@ class DiffusionProcess:
         batch_size = shape[0]
         
         # Start from pure noise
-        x = torch.randn(shape, device=self.device)
+        x = torch.randn(shape, device=self.device) if x_start is None else x_start.clone()
         
         # Convert target_class to tensor if needed
         if target_class is not None:
