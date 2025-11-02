@@ -85,28 +85,29 @@ class DiffusionProcess:
         t_tensor = torch.full((batch_size,), t, device=self.device, dtype=torch.long)
         
         # Predict noise
-        with torch.set_grad_enabled(classifier is not None and guidance_scale > 0):
-            if classifier is not None and guidance_scale > 0:
-                x_t.requires_grad_(True)
+        if classifier is not None and guidance_scale > 0 and target_class is not None:
+            # Enable gradients for guidance
+            x_t = x_t.detach().requires_grad_(True)
             
             predicted_noise = model(x_t, t_tensor)
             
-            # Apply classifier guidance if requested
-            if classifier is not None and guidance_scale > 0 and target_class is not None:
-                # Get classifier predictions
-                logits = classifier(x_t)
-                
-                # Compute gradient of log probability w.r.t. x_t
-                log_probs = F.log_softmax(logits, dim=-1)
-                selected_log_probs = log_probs[range(batch_size), target_class]
-                
-                # Gradient of log p(y|x_t) w.r.t. x_t
-                grad = torch.autograd.grad(selected_log_probs.sum(), x_t)[0]
-                
-                # Modify noise prediction by gradient
-                predicted_noise = predicted_noise - guidance_scale * grad * self.sqrt_one_minus_alphas_cumprod[t]
-                
-                x_t.requires_grad_(False)
+            # Get classifier predictions
+            logits = classifier(x_t)
+            
+            # Compute gradient of log probability w.r.t. x_t
+            log_probs = F.log_softmax(logits, dim=-1)
+            selected_log_probs = log_probs[range(batch_size), target_class]
+            
+            # Gradient of log p(y|x_t) w.r.t. x_t
+            grad = torch.autograd.grad(selected_log_probs.sum(), x_t)[0]
+            
+            # Modify noise prediction by gradient
+            predicted_noise = predicted_noise - guidance_scale * grad * self.sqrt_one_minus_alphas_cumprod[t]
+            
+            # Detach x_t from computation graph
+            x_t = x_t.detach()
+        else:
+            predicted_noise = model(x_t, t_tensor)
         
         # Extract values for current timestep
         alpha_t = self.alphas[t]
