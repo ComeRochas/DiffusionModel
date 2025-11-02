@@ -1,6 +1,6 @@
 # Diffusion Model with Causal Guidance
 
-A PyTorch implementation of a diffusion-based generative model with classifier-guided sampling for counterfactual generation. This project demonstrates controllable image generation on MNIST by intervening on class labels using causal guidance.
+A PyTorch implementation of a diffusion-based generative model with classifier-guided sampling for counterfactual generation. This project intends to demonstrate controllable image generation on MNIST by intervening on class labels using causal guidance.
 
 ## Overview
 
@@ -22,8 +22,8 @@ DiffusionModel/
 ├── results/                     # Generated samples (created during sampling)
 │   ├── sample_unconditional.png
 │   ├── sample_guided.png
-│   ├── counterfactual_example.png
 │   └── all_digits_guided.png
+├── training_results/            # Generated samples every 10 epochs of training
 ├── checkpoints/                 # Saved model checkpoints (created during training)
 └── README.md
 ```
@@ -75,7 +75,7 @@ Generate counterfactual samples using the trained models:
 python sample_counterfactuals.py \
     --diffusion-checkpoint checkpoints/diffusion_final.pt \
     --classifier-checkpoint checkpoints/classifier.pt \
-    --guidance-scale 3.0 \
+    --guidance-scale 5.0 \
     --source-class 8 
 ```
 
@@ -92,7 +92,7 @@ This will generate:
 1. **Unconditional samples**: Random digit generation without guidance
 2. **Guided samples**: Digits conditioned on a specific class
 3. **Counterfactual pairs**: Side-by-side comparison showing "What if we changed the class?"
-4. **All digits**: A grid showing all 10 digit classes
+4. **All digits**: Side-by-side comparison of denoising the same samples, but conditioned on the classes
 
 ## How It Works
 
@@ -107,6 +107,8 @@ The model uses classifier guidance to control generation:
 - A classifier predicts the class label from noisy images
 - During generation, gradients from the classifier guide the denoising process toward the target class
 - This enables **causal intervention**: changing what class we want to generate
+
+- In practice, the classifier was trained on original MNIST images only. Therefore, when confronted to noised images, its gradients are poorly indicative and classifier guidance happens to lack precision. Training a classifier on progressively noised images could potentially solve this issue.
 
 ### Counterfactual Generation
 
@@ -123,17 +125,8 @@ After training and sampling, you'll find in `results/`:
 
 - `sample_unconditional.png`: Random samples without guidance
 - `sample_guided.png`: Samples guided toward a specific class
-- `counterfactual_example.png`: Side-by-side counterfactual pairs
-- `all_digits_guided.png`: Grid of all 10 digit classes
+- `all_digits_guided.png`: 10x10 grid of all 10 digit classes conditioning denoising for 10 fixed inputs
 
-## Key Features
-
-- ✅ **DDPM Implementation**: Full denoising diffusion probabilistic model
-- ✅ **U-Net Architecture**: Powerful neural network for image-to-image translation
-- ✅ **Classifier Guidance**: Control generation with a trained classifier
-- ✅ **Counterfactual Sampling**: Demonstrate causal intervention
-- ✅ **MNIST Dataset**: Easy to train and visualize results
-- ✅ **Modular Design**: Clean separation of models, diffusion process, and training
 
 ## Technical Details
 
@@ -168,7 +161,3 @@ where `scale` controls guidance strength and the gradient comes from the classif
 This implementation is based on:
 - [Denoising Diffusion Probabilistic Models (Ho et al., 2020)](https://arxiv.org/abs/2006.11239)
 - [Diffusion Models Beat GANs on Image Synthesis (Dhariwal & Nichol, 2021)](https://arxiv.org/abs/2105.05233)
-
-## License
-
-MIT License - feel free to use for research and educational purposes.
